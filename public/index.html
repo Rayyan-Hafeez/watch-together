@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Watch Together</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { margin:0; font-family:Arial, sans-serif; background:#0b0f14; color:#e8f0f8; }
+    header { padding:12px; background:#111; display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+    input, button { padding:8px 12px; border-radius:8px; border:1px solid #333; background:#1a1a1a; color:#fff; }
+    button { cursor:pointer; }
+    button.primary { background:#2ea0ff; border:0; color:#000; font-weight:bold; }
+    .container { display:grid; grid-template-columns:2fr 1fr; gap:12px; padding:12px; }
+    .panel { background:#121820; border-radius:10px; padding:10px; }
+    #playerWrap { aspect-ratio:16/9; background:#000; border-radius:10px; overflow:hidden; }
+    #chat { display:flex; flex-direction:column; height:100%; }
+    #messages { flex:1; overflow:auto; margin-bottom:8px; }
+    .msg { background:#1b2533; padding:6px 8px; border-radius:6px; margin-bottom:4px; }
+    .meta { font-size:12px; color:#aaa; }
+    #chatInputRow { display:flex; gap:8px; }
+    #playlist ul { list-style:none; padding:0; }
+    #playlist li { padding:4px; cursor:pointer; border-bottom:1px solid #222; }
+    #playlist li:hover { background:#222; }
+    @media(max-width:900px){ .container { grid-template-columns:1fr; } }
+  </style>
+  <script src="https://www.youtube.com/iframe_api"></script>
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+  <header>
+    <input id="username" placeholder="Your name" />
+    <input id="roomId" placeholder="Room ID" />
+    <button id="connectBtn" class="primary">Connect</button>
+    <button id="reconnectBtn">Reconnect</button>
+    <span id="status"><code>Disconnected</code></span>
+    <span style="margin-left:auto;" id="dcState">DataChannel: closed</span>
+  </header>
+
+  <div class="container">
+    <div>
+      <div id="playerWrap"><div id="player"></div></div>
+      <div style="margin-top:8px; display:flex; gap:6px;">
+        <input id="ytUrl" placeholder="Paste YouTube URL" style="flex:1;" />
+        <button id="loadBtn">Add</button>
+        <button id="playBtn">Play</button>
+        <button id="pauseBtn">Pause</button>
+        <input id="seekSec" type="number" placeholder="Seek (s)" style="width:80px;" />
+        <button id="seekBtn">Go</button>
+      </div>
+      <div id="videoState" style="margin-top:6px;color:#aaa;"></div>
+      <div id="playlist" class="panel" style="margin-top:10px;">
+        <h3>Playlist</h3>
+        <ul id="videoList"></ul>
+      </div>
+    </div>
+
+    <div class="panel" id="chat">
+      <h3>Chat</h3>
+      <div id="messages"></div>
+      <div id="chatInputRow">
+        <input id="chatInput" placeholder="Type a message..." style="flex:1;" />
+        <button id="sendBtn">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="./script.js"></script>
+</body>
+</html>
