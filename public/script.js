@@ -2,36 +2,23 @@
 let socket, pc, dataChannel;
 let isOfferer = false, roomId = null, username = null;
 
-// ---------- TURN / ICE ----------
+// ---------- TURN / ICE (RELAY ONLY for debugging) ----------
 const rtcConfig = {
   iceServers: [
-    // Google STUN
-    { urls: "stun:stun.l.google.com:19302" },
-
-    // OpenRelay free public servers
+    // ✅ Your private Metered TURN — paste your credential here
     {
       urls: [
-        "stun:openrelay.metered.ca:80",
-        "turn:openrelay.metered.ca:80",
-        "turn:openrelay.metered.ca:443",
-        "turn:openrelay.metered.ca:443?transport=tcp"
+        "turn:global.turn.metered.ca:80?transport=udp",
+        "turn:global.turn.metered.ca:443?transport=tcp",
+        "turns:global.turn.metered.ca:5349?transport=tcp"
       ],
-      username: "openrelayproject",
-      credential: "openrelayproject"
-    },
-
-    // ✅ Your private Metered TURN servers
-    {
-      urls: [
-        "turn:global.turn.metered.ca:80",
-        "turn:global.turn.metered.ca:443",
-        "turns:global.turn.metered.ca:5349"
-      ],
-      username: "ae252d15e1da775e7468acad",   // paste here
-      credential: "t0JzBQWecJgByKTO"  // paste here
+      username: "ae252d15e1da775e7468acad",   // <— paste from Metered
+      credential: "t0JzBQWecJgByKTO"  // <— paste from Metered
     }
   ],
-  iceTransportPolicy: "all"
+  // Force relay-only so we can verify TURN actually works
+  iceTransportPolicy: "relay",
+  iceCandidatePoolSize: 0
 };
 
 // ---------- UI refs ----------
@@ -115,11 +102,26 @@ function loadVideoNow(id){ if(playerReady){ try{player.loadVideoById(id);}catch{
 // ---------- WebRTC ----------
 function createPeer(){
   pc=new RTCPeerConnection(rtcConfig);
-  pc.onicecandidate=(e)=>{ if(e.candidate){ console.log("[ICE] local",e.candidate.type,e.candidate.protocol); socket.emit("ice_candidate",{roomId,candidate:e.candidate}); } };
-  pc.oniceconnectionstatechange=()=>{ console.log("[ICE] conn:",pc.iceConnectionState); addMessage({text:`ICE: ${pc.iceConnectionState}`}); };
+
+  pc.onicecandidate=(e)=>{
+    if(e.candidate){
+      console.log("[ICE] local", e.candidate.type, e.candidate.protocol);
+      if (!/relay/i.test(e.candidate.candidate)) {
+        console.log("[ICE] (non-relay ignored by policy)");
+      }
+      socket.emit("ice_candidate",{roomId,candidate:e.candidate});
+    } else {
+      console.log("[ICE] local gathering complete");
+    }
+  };
+
+  pc.onicegatheringstatechange=()=>console.log("[ICE] gathering:",pc.iceGatheringState);
+  pc.oniceconnectionstatechange=()=>{ console.log("[ICE] connection:",pc.iceConnectionState); addMessage({text:`ICE: ${pc.iceConnectionState}`}); };
   pc.onconnectionstatechange=()=>{ console.log("[PC] state:",pc.connectionState); addMessage({text:`Peer: ${pc.connectionState}`}); };
+
   if(isOfferer){ dataChannel=pc.createDataChannel("chat-sync"); setupDC(); }
   else pc.ondatachannel=(e)=>{ dataChannel=e.channel; setupDC(); };
+
   return pc;
 }
 function setupDC(){
@@ -128,30 +130,72 @@ function setupDC(){
   dataChannel.onmessage=(e)=>handleMsg(JSON.parse(e.data));
 }
 function sendDC(obj){ if(dataChannel?.readyState==="open") dataChannel.send(JSON.stringify({...obj,_ts:Date.now()})); }
-async function makeOffer(){ const o=await pc.createOffer(); await pc.setLocalDescription(o); console.log("[SDP] offer sent"); socket.emit("offer",{roomId,sdp:o}); }
-async function makeAnswer(off){ console.log("[SDP] offer recv"); await pc.setRemoteDescription(new RTCSessionDescription(off)); const a=await pc.createAnswer(); await pc.setLocalDescription(a); console.log("[SDP] answer sent"); socket.emit("answer",{roomId,sdp:a}); }
-async function acceptAnswer(ans){ console.log("[SDP] answer recv"); await pc.setRemoteDescription(new RTCSessionDescription(ans)); }
+
+async function makeOffer(){
+  const o=await pc.createOffer({ offerToReceiveAudio:false, offerToReceiveVideo:false });
+  await pc.setLocalDescription(o);
+  console.log("[SDP] offer sent");
+  socket.emit("offer",{roomId,sdp:o});
+}
+async function makeAnswer(off){
+  console.log("[SDP] offer recv");
+  await pc.setRemoteDescription(new RTCSessionDescription(off));
+  const a=await pc.createAnswer();
+  await pc.setLocalDescription(a);
+  console.log("[SDP] answer sent");
+  socket.emit("answer",{roomId,sdp:a});
+}
+async function acceptAnswer(ans){
+  console.log("[SDP] answer recv");
+  await pc.setRemoteDescription(new RTCSessionDescription(ans));
+}
 
 // ---------- Signaling ----------
 function initSignaling(){
   socket=io();
+
   socket.on("connect",()=>setStatus("Connected to signaling"));
   socket.on("disconnect",()=>setStatus("Disconnected"));
+
   socket.on("joined",({roomId:r})=>addMessage({text:`Joined room: ${r}`}));
-  socket.on("make_offer",async()=>{ addMessage({text:"You make the offer"}); isOfferer=true; if(!pc)createPeer(); await makeOffer(); });
-  socket.on("await_offer",()=>{ addMessage({text:"Waiting for offer"}); isOfferer=false; if(!pc)createPeer(); });
-  socket.on("offer",async({sdp})=>{ isOfferer=false; if(!pc)createPeer(); await makeAnswer(sdp); });
-  socket.on("answer",async({sdp})=>{ await acceptAnswer(sdp); });
-  socket.on("ice_candidate",async({candidate})=>{ console.log("[ICE] remote",candidate?.type,candidate?.protocol); try{ await pc.addIceCandidate(candidate);}catch{} });
-  socket.on("room_full",()=>addMessage({text:"Room full"}));
-  socket.on("peer_left",()=>addMessage({text:"Peer left"}));
+
+  socket.on("make_offer",async()=>{
+    addMessage({text:"You make the offer"});
+    isOfferer=true;
+    if(!pc) createPeer();
+    await makeOffer();
+  });
+
+  socket.on("await_offer",()=>{
+    addMessage({text:"Waiting for offer"});
+    isOfferer=false;
+    if(!pc) createPeer();
+  });
+
+  socket.on("offer",async({sdp})=>{
+    isOfferer=false;
+    if(!pc) createPeer();
+    await makeAnswer(sdp);
+  });
+
+  socket.on("answer",async({sdp})=>{
+    await acceptAnswer(sdp);
+  });
+
+  socket.on("ice_candidate",async({candidate})=>{
+    console.log("[ICE] remote", candidate?.type, candidate?.protocol);
+    try{ await pc.addIceCandidate(candidate); }catch(e){ console.warn("addIceCandidate failed", e); }
+  });
+
+  socket.on("room_full",()=>addMessage({text:"Room is full (2 peers max)."}));
+  socket.on("peer_left",()=>addMessage({text:"Peer left the room."}));
 }
 
-// ---------- Msgs ----------
+// ---------- DataChannel messages ----------
 function handleMsg(msg){
   if(msg.type==="chat"){ addMessage({user:msg.username||"Peer",text:msg.text,ts:msg._ts}); return; }
   if(msg.type==="yt_load"){ loadVideoNow(msg.videoId); return; }
-  if(msg.type==="yt_play"){ suppressEvents=true; safeSeek(msg.time||0); safePlay(); setTimeout(()=>suppressEvents=false,250); updateVideoState(); return; }
+  if(msg.type==="yt_play"){ suppressEvents=true; safeSeek(msg.time||0); safePlay();  setTimeout(()=>suppressEvents=false,250); updateVideoState(); return; }
   if(msg.type==="yt_pause"){ suppressEvents=true; safeSeek(msg.time||0); safePause(); setTimeout(()=>suppressEvents=false,250); updateVideoState(); return; }
   if(msg.type==="yt_seek"){ suppressEvents=true; safeSeek(msg.time||0); setTimeout(()=>suppressEvents=false,250); updateVideoState(); return; }
 }
@@ -160,17 +204,36 @@ function handleMsg(msg){
 connectBtn.onclick=()=>{
   username=(nameInput?.value||"").trim()||`User-${Math.floor(Math.random()*1000)}`;
   roomId=(roomInput?.value||"").trim();
-  if(!roomId){ roomId=generateRoomId(); if(roomInput) roomInput.value=roomId; addMessage({text:`Room created: ${window.location.origin}/?room=${roomId}`}); }
+  if(!roomId){
+    roomId=generateRoomId();
+    if(roomInput) roomInput.value=roomId;
+    addMessage({text:`Room created: ${window.location.origin}/?room=${roomId}`});
+  }
   initSignaling();
   socket.emit("join",{roomId,username});
   setStatus(`Joining ${roomId}...`);
 };
-loadBtn.onclick=()=>{ const id=parseYouTubeId((ytUrlInput.value||"").trim()); if(!id)return; loadVideoNow(id); sendDC({type:"yt_load",videoId:id}); };
-playBtn.onclick =()=>{ try{player.playVideo();}catch{} sendDC({type:"yt_play",time:player?.getCurrentTime?.()||0}); };
+
+loadBtn.onclick=()=>{
+  const id=parseYouTubeId((ytUrlInput.value||"").trim());
+  if(!id) return;
+  loadVideoNow(id);                       // show locally
+  sendDC({ type:"yt_load", videoId:id }); // tell peer to load
+};
+
+playBtn.onclick =()=>{ try{player.playVideo();}catch{} sendDC({type:"yt_play", time:player?.getCurrentTime?.()||0}); };
 pauseBtn.onclick=()=>{ try{player.pauseVideo();}catch{} sendDC({type:"yt_pause",time:player?.getCurrentTime?.()||0}); };
-seekBtn.onclick =()=>{ const t=Number(seekSec.value); if(Number.isFinite(t)){ safeSeek(t); sendDC({type:"yt_seek",time:t}); }};
-sendBtn.onclick=()=>{ const text=(chatInput.value||"").trim(); if(!text)return; addMessage({user:username||"Me",text}); sendDC({type:"chat",text,username}); chatInput.value=""; };
+seekBtn.onclick =()=>{ const t=Number(seekSec.value); if(Number.isFinite(t)){ safeSeek(t); sendDC({type:"yt_seek", time:t}); }};
+
+// Chat
+sendBtn.onclick=()=>{
+  const text=(chatInput.value||"").trim();
+  if(!text) return;
+  addMessage({ user:username||"Me", text });
+  sendDC({ type:"chat", text, username });
+  chatInput.value="";
+};
 chatInput.onkeydown=(e)=>{ if(e.key==="Enter") sendBtn.click(); };
 
-// Pre-fill from URL
+// Pre-fill room from URL
 (()=>{ try{ const u=new URL(location.href); const r=u.searchParams.get("room"); if(r&&roomInput) roomInput.value=r; }catch{} })();
