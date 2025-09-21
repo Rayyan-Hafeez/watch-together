@@ -6,52 +6,71 @@ const { Server } = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
+const io = new Server(server, {
+  cors: { origin: "*"},
+  transports: ["websocket", "polling"],
+  pingTimeout: 30000,
+  pingInterval: 25000
+});
 
 app.use(express.static(path.join(__dirname, "public")));
+app.get("/healthz", (_req, res) => res.status(200).send("ok"));
 
 io.on("connection", (socket) => {
+  console.log("socket connected", socket.id);
+
   socket.on("join", ({ roomId, username }) => {
-    const room = io.sockets.adapter.rooms.get(roomId);
-    const num = room ? room.size : 0;
+    try {
+      if (!roomId) return socket.emit("error_msg", "No roomId");
+      const room = io.sockets.adapter.rooms.get(roomId);
+      const size = room ? room.size : 0;
+      if (size >= 2) {
+        socket.emit("room_full");
+        return;
+      }
+      socket.join(roomId);
+      socket.data.roomId = roomId;
+      socket.data.username = username || `User-${socket.id.slice(0,4)}`;
+      console.log(`socket ${socket.id} joined ${roomId}, size before: ${size}`);
 
-    if (num >= 2) {
-      socket.emit("room_full");
-      return;
-    }
+      socket.emit("joined", { roomId });
 
-    socket.join(roomId);
-    socket.data.roomId = roomId;
-    socket.data.username = username || `User-${socket.id.slice(0, 4)}`;
-    socket.emit("joined", { roomId, id: socket.id });
-
-    // If room now has 2 members, assign roles
-    const roomNow = io.sockets.adapter.rooms.get(roomId);
-    if (roomNow && roomNow.size === 2) {
-      const ids = Array.from(roomNow.values());
-      const offererId = ids[0];
-      const answererId = ids[1];
-
-      io.to(offererId).emit("make_offer", { peerId: answererId });
-      io.to(answererId).emit("await_offer", { peerId: offererId });
-      io.to(roomId).emit("peer_ready");
+      const after = io.sockets.adapter.rooms.get(roomId);
+      if (after && after.size === 2) {
+        const ids = Array.from(after.values());
+        // Choose first to make the offer
+        io.to(ids[0]).emit("make_offer", { peerId: ids[1] });
+        io.to(ids[1]).emit("await_offer", { peerId: ids[0] });
+        io.to(roomId).emit("peer_ready");
+      }
+    } catch (e) {
+      console.error("join error", e);
     }
   });
 
-  socket.on("offer", ({ roomId, sdp }) => socket.to(roomId).emit("offer", { sdp }));
-  socket.on("answer", ({ roomId, sdp }) => socket.to(roomId).emit("answer", { sdp }));
-  socket.on("ice_candidate", ({ roomId, candidate }) =>
-    socket.to(roomId).emit("ice_candidate", { candidate })
-  );
+  socket.on("offer", ({ roomId, sdp }) => {
+    socket.to(roomId).emit("offer", { sdp });
+  });
+
+  socket.on("answer", ({ roomId, sdp }) => {
+    socket.to(roomId).emit("answer", { sdp });
+  });
+
+  socket.on("ice_candidate", ({ roomId, candidate }) => {
+    socket.to(roomId).emit("ice_candidate", { candidate });
+  });
 
   socket.on("disconnect", () => {
-    const roomId = socket.data.roomId;
-    if (roomId) socket.to(roomId).emit("peer_left");
+    const r = socket.data?.roomId;
+    if (r) {
+      socket.to(r).emit("peer_left");
+    }
+    console.log("socket disconnected", socket.id);
   });
 });
 
 const PORT = process.env.PORT || 3000;
 const HOST = "0.0.0.0";
 server.listen(PORT, HOST, () => {
-  console.log(`Signaling server running on http://${HOST}:${PORT}`);
+  console.log(`Signaling server on http://${HOST}:${PORT}`);
 });
