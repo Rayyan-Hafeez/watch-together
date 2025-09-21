@@ -5,7 +5,10 @@ let isOfferer = false, roomId = null, username = null;
 // ---------- TURN / ICE ----------
 const rtcConfig = {
   iceServers: [
+    // Google STUN
     { urls: "stun:stun.l.google.com:19302" },
+
+    // OpenRelay free public servers
     {
       urls: [
         "stun:openrelay.metered.ca:80",
@@ -15,6 +18,17 @@ const rtcConfig = {
       ],
       username: "openrelayproject",
       credential: "openrelayproject"
+    },
+
+    // ✅ Your private Metered TURN servers
+    {
+      urls: [
+        "turn:global.turn.metered.ca:80",
+        "turn:global.turn.metered.ca:443",
+        "turns:global.turn.metered.ca:5349"
+      ],
+      username: "ae252d15e1da775e7468acad",   // paste here
+      credential: "t0JzBQWecJgByKTO"  // paste here
     }
   ],
   iceTransportPolicy: "all"
